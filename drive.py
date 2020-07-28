@@ -21,18 +21,19 @@ class DriveCore:
 class Drive:
     def __init__(self, driveCore: DriveCore):
         self.drive_core = driveCore
-        self.used_replicators = 0
+        #self.used_replicators = 0
+        self.replicators = set()
 
     def get_replicators_left(self):
-        return self.drive_core.required_replicators - self.used_replicators
+        return self.drive_core.required_replicators - self.get_used_replicators()
 
     def get_rewards(self):
-        if self.used_replicators < self.get_min_replicators():
+        if self.get_used_replicators() < self.get_min_replicators():
             return 0
-        return self.drive_core.size * self.drive_core.required_replicators / self.used_replicators
+        return self.drive_core.size * self.drive_core.required_replicators / self.get_used_replicators()
 
     def is_full(self):
-        return self.drive_core.required_replicators == self.used_replicators
+        return self.drive_core.required_replicators == self.get_used_replicators()
 
     def get_min_replicators(self):
         return int(np.round(2 * self.drive_core.required_replicators / 3))
@@ -41,13 +42,13 @@ class Drive:
         return self.drive_core.required_replicators
 
     def get_used_replicators(self):
-        return self.used_replicators
+        return len(self.replicators)
 
-    def add_replicator(self):
-        self.used_replicators += 1
+    def add_replicator(self, replicator_id):
+        self.replicators.add(replicator_id)
 
     def has_min_replicators(self):
-        return 3 * self.used_replicators > 2 * self.drive_core.required_replicators
+        return 3 * self.get_used_replicators() > 2 * self.drive_core.required_replicators
 
     def get_size(self):
         return self.drive_core.size
@@ -58,6 +59,11 @@ class Drive:
     def get_drive_id(self):
         return self.drive_core.drive_id
 
+    def get_replicators(self):
+        return self.replicators
+
+    def clear_replicators(self):
+        self.replicators.clear()
 
 class DrivesFactory:
     def __init__(self, channels):
@@ -146,7 +152,7 @@ class Replicator:
                     dp[i][j] = dp[i - 1][j]
                     take[i][j] = False
                 else:
-                    add = self.get_dynamic_rewards(drive)
+                    add = self.get_weight_value(drive)
                     if dp[i - 1][j] > dp[i - 1][j - cur_size] + add:
                         dp[i][j] = dp[i - 1][j]
                         take[i][j] = False
@@ -265,6 +271,11 @@ class Replicator:
         else:
             return (r_max - r) / (r_min * (r_max - r_min))
 
+    def remove_drive(self, drive):
+        drive_id = drive.get_drive_id()
+        if drive_id in self.drives:
+            self.used_space -= drive.get_size()
+            self.drives.remove(drive_id)
 
 class ReplicatorsFactory:
     def __init__(self, channels, n):
@@ -276,7 +287,6 @@ class ReplicatorsFactory:
 
     def get_replicators(self):
         return self.replicators_channels
-
 
 class Statistics:
     def __init__(self, pref):
@@ -459,7 +469,7 @@ def accept_drive(replicator: Replicator, drive: Drive, epoch, statistics: Statis
     replicator.accept_drive(drive)
     #had_min_replicators = drive.has_min_replicators()
     #was_full = drive.is_full()
-    drive.add_replicator()
+    drive.add_replicator(replicator.get_id())
     #has_min_replicators = drive.has_min_replicators()
     #is_full = drive.is_full()
     #if not had_min_replicators and has_min_replicators:
@@ -473,6 +483,15 @@ def are_valid(replicator, drives, requests):
     for drive_id in requests:
         sum += drives[drive_id].get_size()
     return replicator.get_space() >= replicator.used_space + sum
+
+def should_del_drive(drive_id, drives, replicators, epoch):
+    drive = drives[drive_id]
+    age = epoch - drive.get_epoch() + 1
+    epochs_to_live = 5
+    if not drive.has_min_replicators() and age >= epochs_to_live:
+        for replicator_id in drive.get_replicators():
+            replicators[replicator_id].remove_drive(drive)
+        return True
 
 
 def main():
@@ -495,12 +514,12 @@ def main():
                 have = 0
                 for replicator in replicators:
                     have += replicator.get_space()
-                print('need {}'.format(need), 'have {}'.format(have))
+                # print('need {}'.format(need), 'have {}'.format(have))
             print(request_function)
             all_requests = dict()
             statistics.update_drives_number(drives_factory.drives_created)
             for replicator_i, replicator in enumerate(replicators):
-                print(replicator_i)
+                # print(replicator_i)
                 requests = replicator.generate_requests(drives, request_function)
                 for drive_id in requests:
                     if drive_id not in all_requests:
@@ -521,6 +540,12 @@ def main():
             #statistics.add_replicators_stats(replicators)
             # statistics.draw_statistics(step)
             statistics.finish_epoch(replicators, drives_factory.get_drives_infinite(channel))
+            drives_to_del = []
+            for drive_id, drive in drives.items():
+                if should_del_drive(drive_id, drives, replicators, step):
+                    drives_to_del.append(drive_id)
+            for drive_id in drives_to_del:
+                drives_factory.remove_drive(channel, drive_id)
         Statistics.finish_statistics(statistics_channels, step)
     return drives_factory, replicators_factory, statistics_channels
 
