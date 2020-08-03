@@ -2,7 +2,7 @@ import numpy as np
 import random
 import matplotlib.pyplot as plt
 import matplotlib
-
+import os
 
 class DriveCore:
     def __init__(self, id, epoch):
@@ -152,7 +152,7 @@ class Replicator:
                     dp[i][j] = dp[i - 1][j]
                     take[i][j] = False
                 else:
-                    add = self.get_weight_value(drive)
+                    add = self.get_dynamic_rewards(drive)
                     if dp[i - 1][j] > dp[i - 1][j - cur_size] + add:
                         dp[i][j] = dp[i - 1][j]
                         take[i][j] = False
@@ -371,6 +371,8 @@ class Statistics:
         if y_range is not None:
             ax.set_ylim(y_range[0], y_range[1])
         x = range(len(arrays[0]))
+        ticks = range(0, len(arrays[0]), 2)
+        ax.set_xticks(ticks)
         for array, label in zip(arrays, labels):
             if len(x) != len(array):
                 print('LOL')
@@ -378,19 +380,19 @@ class Statistics:
         ax.legend()
 
     @staticmethod
-    def finish_statistics(statistics_channels, epoch):
+    def finish_statistics(statistics_channels, epoch, name):
         font = {'family': 'normal',
                 'weight': 'bold',
                 'size': 22}
         matplotlib.rc('font', **font)
-        labels = [statistics.pref for statistics in statistics_channels]
+        labels = [statistics.pref for k, statistics in statistics_channels.items()]
         fig, axs = plt.subplots(ncols=1, nrows=6, figsize=(25, 25))
-        Statistics.plt_plots(axs[0], [statistics.drives_with_min_replicators for statistics in statistics_channels], labels)
-        Statistics.plt_plots(axs[1], [statistics.drives_with_required_replicators for statistics in statistics_channels], labels)
-        Statistics.plt_plots(axs[2], [statistics.replicators_accepted_ratio for statistics in statistics_channels], labels)
-        Statistics.plt_plots(axs[3], [statistics.mean_rewards for statistics in statistics_channels], labels)
-        Statistics.plt_plots(axs[4], [statistics.occupied_space_ratio for statistics in statistics_channels], labels)
-        Statistics.plt_plots(axs[5], [statistics.useful_occupied_space_ratio for statistics in statistics_channels], labels)
+        Statistics.plt_plots(axs[0], [statistics.drives_with_min_replicators for k, statistics in statistics_channels.items()], labels)
+        Statistics.plt_plots(axs[1], [statistics.drives_with_required_replicators for k, statistics in statistics_channels.items()], labels)
+        Statistics.plt_plots(axs[2], [statistics.replicators_accepted_ratio for k, statistics in statistics_channels.items()], labels)
+        Statistics.plt_plots(axs[3], [statistics.mean_rewards for k, statistics in statistics_channels.items()], labels)
+        Statistics.plt_plots(axs[4], [statistics.occupied_space_ratio for k, statistics in statistics_channels.items()], labels)
+        Statistics.plt_plots(axs[5], [statistics.useful_occupied_space_ratio for k, statistics in statistics_channels.items()], labels)
         # for j, statistics in enumerate(statistics_channels):
         #     Statistics.plt_bar(axs[0][j], statistics.drives_with_min_replicators)
         #     Statistics.plt_bar(axs[1][j], statistics.drives_with_required_replicators)
@@ -411,7 +413,9 @@ class Statistics:
         #     ax.annotate(row, xy=(0, 0.5), xytext=(-ax.yaxis.labelpad - pad, 0),
         #                 xycoords=ax.yaxis.label, textcoords='offset points',
         #                 size='large', ha='right', va='center')
-        plt.savefig('res/stats_epoch_{}.png'.format(epoch))
+        if not os.path.exists('res/{}'.format(name)):
+            os.mkdir('res/{}'.format(name))
+        plt.savefig('res/{}/stats_epoch_{}.png'.format(name, epoch))
         plt.close(fig)
 
     def update_drives_number(self, number):
@@ -484,48 +488,51 @@ def are_valid(replicator, drives, requests):
         sum += drives[drive_id].get_size()
     return replicator.get_space() >= replicator.used_space + sum
 
-def should_del_drive(drive_id, drives, replicators, epoch):
+def should_del_drive(drive_id, drives, replicators, epoch, epochs_to_live):
     drive = drives[drive_id]
     age = epoch - drive.get_epoch() + 1
-    epochs_to_live = 5
     if not drive.has_min_replicators() and age >= epochs_to_live:
         for replicator_id in drive.get_replicators():
             replicators[replicator_id].remove_drive(drive)
         return True
 
+def get_request_functions():
+    functions = ['dynamic', 'dynamic_random', 'random', 'random_weighted']
+    epochs_to_live = [3, 5, 7]
+    res = []
+    for function in functions:
+        for epoch_to_live in epochs_to_live:
+            res.append((function, epoch_to_live))
+    return res
+
+def get_statistics(request_functions):
+    statistics = {function[0]: dict() for function in request_functions}
+    for function, epochs_to_live in request_functions:
+        statistics[function][epochs_to_live] = Statistics(function + str(epochs_to_live))
+    return statistics
 
 def main():
-    np.random.seed(18)
+    np.random.seed(23)
     steps = 20
     replicators_n = 100
-    request_functions = ['dynamic', 'dynamic_random', 'random', 'random_weighted']
+    request_functions = get_request_functions()
     replicators_factory = ReplicatorsFactory(len(request_functions), replicators_n)
     drives_factory = DrivesFactory(len(request_functions))
-    statistics_channels = [Statistics(function) for function in request_functions]
+    statistics_channels = get_statistics(request_functions)
     for step in range(steps):
-        print(step)
         drives_factory.generate_drives(step)
-        for channel, (replicators, drives, statistics, request_function) in enumerate(zip(replicators_factory.get_replicators(),
-            drives_factory.get_drive_channels(), statistics_channels, request_functions)):
-            if step == 0 and channel == 0:
-                need = 0
-                for drive_id, drive in drives.items():
-                    need += drive.get_size() * drive.get_required_replicators()
-                have = 0
-                for replicator in replicators:
-                    have += replicator.get_space()
-                # print('need {}'.format(need), 'have {}'.format(have))
+        for channel, (replicators, drives, (request_function, epochs_to_live)) in enumerate(zip(replicators_factory.get_replicators(),
+            drives_factory.get_drive_channels(), request_functions)):
+            statistics = statistics_channels[request_function][epochs_to_live]
             print(request_function)
             all_requests = dict()
             statistics.update_drives_number(drives_factory.drives_created)
             for replicator_i, replicator in enumerate(replicators):
-                # print(replicator_i)
                 requests = replicator.generate_requests(drives, request_function)
                 for drive_id in requests:
                     if drive_id not in all_requests:
                         all_requests[drive_id] = []
                     all_requests[drive_id].append(replicator.get_id())
-                    # statistics.notify_request_made()
             print(request_function, len(all_requests))
             for drive_id, drive in all_requests.items():
                 need = drives[drive_id].get_replicators_left()
@@ -542,11 +549,12 @@ def main():
             statistics.finish_epoch(replicators, drives_factory.get_drives_infinite(channel))
             drives_to_del = []
             for drive_id, drive in drives.items():
-                if should_del_drive(drive_id, drives, replicators, step):
+                if should_del_drive(drive_id, drives, replicators, step, epochs_to_live):
                     drives_to_del.append(drive_id)
             for drive_id in drives_to_del:
                 drives_factory.remove_drive(channel, drive_id)
-        Statistics.finish_statistics(statistics_channels, step)
+        for function, statistics in statistics_channels.items():
+            Statistics.finish_statistics(statistics, step, function)
     return drives_factory, replicators_factory, statistics_channels
 
 
